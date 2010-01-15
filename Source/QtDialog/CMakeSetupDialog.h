@@ -16,6 +16,7 @@
 #include "QCMake.h"
 #include <QMainWindow>
 #include <QThread>
+#include <QSharedPointer>
 #include "ui_CMakeSetupDialog.h"
 
 class QCMakeThread;
@@ -37,19 +38,28 @@ public slots:
 
 protected slots: 
   void initialize();
+  void doDefaultAction();
   void doConfigure();
   void doGenerate();
+  void doBuild();
+  void doInstall();
+  void doClean();
   void doInstallForCommandLine();
   void doHelp();
   void doAbout();
   void doInterrupt();
   void finishConfigure(int error);
   void finishGenerate(int error);
+  void finishBuild(int error);
+  void finishInstall(int error);
+  void finishClean(int error);
   void error(const QString& message);
   void message(const QString& message);
   
   void doSourceBrowse();
+  void doSourceOpen();
   void doBinaryBrowse();
+  void doBinaryOpen();
   void doReloadCache();
   void doDeleteCache();
   void updateSourceDirectory(const QString& dir);
@@ -73,11 +83,16 @@ protected slots:
   void setViewType(int);
   void showUserChanges();
   void setSearchFilter(const QString& str);
+  void activeConfigurationChanged(bool checked);
+  void activeConfigurationChanged(int index);
 
 protected:
 
-  enum State { Interrupting, ReadyConfigure, ReadyGenerate, Configuring, Generating };
+  enum State { Interrupting, ReadyConfigure, ReadyGenerate, ReadyBuild,
+    ReadyInstall, Configuring, Generating, Building, Installing, Cleaning };
   void enterState(State s);
+  void setDefaultAction(QAction* action);
+  void manageConfigs();
 
   void closeEvent(QCloseEvent*);
   void dragEnterEvent(QDragEnterEvent*);
@@ -88,12 +103,23 @@ protected:
   bool CacheModified;
   QAction* ReloadCacheAction;
   QAction* DeleteCacheAction;
+  QAction* OpenSourceDirectoryAction;
+  QAction* OpenBuildDirectoryAction;
   QAction* ExitAction;
   QAction* ConfigureAction;
+  QAction* StopAction;
   QAction* GenerateAction;
+  QAction* BuildAction;
+  QAction* CleanAction;
+  QAction* InstallAction;
+  QAction* DefaultAction;
+  QMenu*   ActiveConfigurationMenu;
+  QSharedPointer<QActionGroup> ConfigurationActionsGroup;
   QAction* SuppressDevWarningsAction;
   QAction* InstallForCommandLineAction;
   State CurrentState;
+  QList<QAction*> ConfigurationActions;
+  QString CurrentConfiguration;
 
   QTextCharFormat ErrorFormat;
   QTextCharFormat MessageFormat;

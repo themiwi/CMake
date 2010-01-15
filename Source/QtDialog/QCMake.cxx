@@ -50,6 +50,8 @@ QCMake::QCMake(QObject* p)
   cmSystemTools::DisableRunCommandOutput();
   cmSystemTools::SetRunCommandHideConsole(true);
   cmSystemTools::SetErrorCallback(QCMake::errorCallback, this);
+  cmSystemTools::SetStdoutCallback(QCMake::stdoutCallback, this);
+  cmSystemTools::SetKillChildCallback(QCMake::killChildCallback, this);
   cmSystemTools::FindExecutableDirectory(cmakeCommand.toAscii().data());
 
   this->CMakeInstance = new cmake;
@@ -77,6 +79,7 @@ QCMake::QCMake(QObject* p)
       }
     this->AvailableGenerators.append(iter->c_str());
     }
+  this->ShouldKillChild = false;
 }
 
 QCMake::~QCMake()
@@ -146,6 +149,8 @@ void QCMake::setGenerator(const QString& gen)
   if(this->Generator != gen)
     {
     this->Generator = gen;
+    // only parse progress from Unix Makefile generators
+    this->CanParseProgress = this->Generator.indexOf("Unix Makefiles") != -1;
     emit this->generatorChanged(this->Generator);
     }
 }
@@ -174,6 +179,7 @@ void QCMake::configure()
   SetErrorMode(lastErrorMode);
 #endif
 
+  this->ShouldKillChild = false;
   emit this->propertiesChanged(this->properties());
   emit this->configureDone(err);
 }
@@ -191,9 +197,82 @@ void QCMake::generate()
   SetErrorMode(lastErrorMode);
 #endif
 
+  this->ShouldKillChild = false;
   emit this->generateDone(err);
 }
-  
+
+void QCMake::build(QString config)
+{
+#ifdef Q_OS_WIN
+  UINT lastErrorMode = SetErrorMode(0);
+#endif
+
+  cmSystemTools::ResetErrorOccuredFlag();
+  int err = this->CMakeInstance->Build(
+      this->CMakeInstance->GetStartOutputDirectory(),
+      "",
+      config.toAscii().data(),
+      std::vector<std::string>(),
+      false
+      );
+
+#ifdef Q_OS_WIN
+  SetErrorMode(lastErrorMode);
+#endif
+
+  this->flushOutputBuffer();
+  this->ShouldKillChild = false;
+  emit this->buildDone(err);
+}
+
+void QCMake::install(QString config)
+{
+#ifdef Q_OS_WIN
+  UINT lastErrorMode = SetErrorMode(0);
+#endif
+
+  cmSystemTools::ResetErrorOccuredFlag();
+  int err = this->CMakeInstance->Build(
+      this->CMakeInstance->GetStartOutputDirectory(),
+      "install",
+      config.toAscii().data(),
+      std::vector<std::string>(),
+      false
+      );
+
+#ifdef Q_OS_WIN
+  SetErrorMode(lastErrorMode);
+#endif
+
+  this->flushOutputBuffer();
+  this->ShouldKillChild = false;
+  emit this->installDone(err);
+}
+
+void QCMake::clean(QString config)
+{
+#ifdef Q_OS_WIN
+  UINT lastErrorMode = SetErrorMode(0);
+#endif
+
+  cmSystemTools::ResetErrorOccuredFlag();
+  int err = this->CMakeInstance->Build(
+      this->CMakeInstance->GetStartOutputDirectory(),
+      "clean",
+      config.toAscii().data(),
+      std::vector<std::string>(),
+      false
+      );
+
+#ifdef Q_OS_WIN
+  SetErrorMode(lastErrorMode);
+#endif
+
+  this->flushOutputBuffer();
+  this->ShouldKillChild = false;
+  emit this->cleanDone(err);
+}
+
 void QCMake::setProperties(const QCMakePropertyList& newProps)
 {
   QCMakePropertyList props = newProps;
@@ -329,6 +408,7 @@ QCMakePropertyList QCMake::properties() const
   
 void QCMake::interrupt()
 {
+  this->ShouldKillChild = true;
   cmSystemTools::SetFatalErrorOccured();
 }
 
@@ -352,6 +432,66 @@ void QCMake::errorCallback(const char* msg, const char* /*title*/,
   QCMake* self = reinterpret_cast<QCMake*>(cd);
   emit self->errorMessage(msg);
   QCoreApplication::processEvents();
+}
+
+void QCMake::stdoutCallback(const char* data, int length, void* cd)
+{
+  QCMake* self = reinterpret_cast<QCMake*>(cd);
+  if(length)
+    {
+    // sometimes data still contains NULL and QString doesn't have a
+    // constructor QString(char*, int)
+    std::string tmp(data, length);
+    std::string::iterator i = tmp.begin(), e = tmp.end();
+    for(; i != e; ++i)
+      if(*i == '\0')
+        *i = ' ';
+    // fromUtf8 seems to work for all LC_CTYPES for me...
+    QString qtmp = QString::fromUtf8(tmp.c_str());
+    // if possible, parse progress information
+    if(self->CanParseProgress)
+      {
+      QRegExp rx("^\\[\\s*(\\d+)%\\]");
+      foreach(QString line, qtmp.split("\n", QString::SkipEmptyParts))
+        {
+        if(rx.indexIn(line) != -1)
+          {
+          bool ok;
+          float percent = rx.cap(1).toFloat(&ok);
+          if(ok)
+            {
+            emit self->progressChanged(QString(), percent/100);
+            }
+            break;
+          }
+        }
+      }
+    // append to buffer
+    self->OutputBuffer += qtmp;
+    // find the last newline
+    int idx = self->OutputBuffer.lastIndexOf("\n");
+    if(idx > 0)
+      {
+      // output text up to the newline (the widget adds a newline itself, the
+      // whole reason for the buffering)
+      emit self->outputMessage(self->OutputBuffer.left(idx));
+      // chop buffer
+      self->OutputBuffer.remove(0, idx+1);
+      }
+    }
+  QCoreApplication::processEvents();
+}
+
+bool QCMake::killChildCallback(void* cd)
+{
+  QCMake* self = reinterpret_cast<QCMake*>(cd);
+  return self->ShouldKillChild;
+}
+
+void QCMake::flushOutputBuffer()
+{
+  if(!this->OutputBuffer.isEmpty())
+    emit this->outputMessage(this->OutputBuffer);
 }
 
 QString QCMake::binaryDirectory() const

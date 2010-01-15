@@ -27,6 +27,7 @@ ELSE(NOT QT4_FOUND)
       "WARNING: QtDialog requires a static built qt for installation.")
   ENDIF(WIN32 AND NOT QT_CONFIG MATCHES "static")
   SET(SRCS
+    ActionButtonEventFilter.cxx
     AddCacheEntry.cxx
     AddCacheEntry.h
     CMakeSetup.cxx
@@ -51,6 +52,7 @@ ELSE(NOT QT4_FOUND)
     MacInstallDialog.ui
     )
   QT4_WRAP_CPP(MOC_SRCS 
+    ActionButtonEventFilter.h
     AddCacheEntry.h
     Compilers.h
     CMakeSetupDialog.h

@@ -81,6 +81,22 @@ public:
   typedef  void (*StdoutCallback)(const char*, int length, void*);
   static void SetStdoutCallback(StdoutCallback, void* clientData=0);
 
+  /** Execute the callback function while running a child processes with
+   * RunSingleCommand. If it returns \c true, the child process should be
+   * killed.
+   */
+  static bool ExecuteKillChildCallback();
+  typedef  bool (*KillChildCallback)(void*);
+  /**
+   * Set a callback function which gets periodically called during the
+   * execution of RunSingleCommand. If the callback returns \c true, the child
+   * should be killed.
+   *
+   * NB: Not implemented for RunCommand because the Unix implementation
+   * (RunCommandViaPopen) uses popen which can't be killed easily.
+   */
+  static void SetKillChildCallback(KillChildCallback, void* clientData=0);
+
   ///! Return true if there was an error at any point.
   static bool GetErrorOccuredFlag() 
     {
@@ -445,8 +461,10 @@ private:
   static bool s_DisableRunCommandOutput;
   static ErrorCallback s_ErrorCallback;
   static StdoutCallback s_StdoutCallback;
+  static KillChildCallback s_KillChildCallback;
   static void* s_ErrorCallbackClientData;
   static void* s_StdoutCallbackClientData;
+  static void* s_KillChildCallbackClientData;
 
   static std::string s_Windows9xComspecSubstitute;
 };

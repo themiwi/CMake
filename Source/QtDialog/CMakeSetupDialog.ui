@@ -37,7 +37,7 @@
      <item row="0" column="2" >
       <widget class="QPushButton" name="BrowseSourceDirectoryButton" >
        <property name="text" >
-        <string>Browse &amp;Source...</string>
+        <string>Choose &amp;Source...</string>
        </property>
       </widget>
      </item>
@@ -64,7 +64,35 @@
      <item row="1" column="2" >
       <widget class="QPushButton" name="BrowseBinaryDirectoryButton" >
        <property name="text" >
-        <string>Browse &amp;Build...</string>
+        <string>Choose &amp;Build...</string>
+       </property>
+      </widget>
+     </item>
+     <item row="0" column="3">
+      <widget class="QToolButton" name="OpenSourceDirectoryButton">
+       <property name="toolTip">
+        <string>Open Source Directory</string>
+       </property>
+       <property name="text">
+        <string/>
+       </property>
+       <property name="icon">
+        <iconset resource="CMakeSetup.qrc">
+         <normaloff>:/Icons/emblem-symbolic-link.png</normaloff>:/Icons/emblem-symbolic-link.png</iconset>
+       </property>
+      </widget>
+     </item>
+     <item row="1" column="3">
+      <widget class="QToolButton" name="OpenBinaryDirectoryButton">
+       <property name="toolTip">
+        <string>Open Build Directory</string>
+       </property>
+       <property name="text">
+        <string>...</string>
+       </property>
+       <property name="icon">
+        <iconset resource="CMakeSetup.qrc">
+         <normaloff>:/Icons/emblem-symbolic-link.png</normaloff>:/Icons/emblem-symbolic-link.png</iconset>
        </property>
       </widget>
      </item>
@@ -228,18 +256,14 @@
           <number>6</number>
          </property>
          <item>
-          <widget class="QPushButton" name="ConfigureButton" >
-           <property name="text" >
-            <string>&amp;Configure</string>
+          <widget class="QPushButton" name="ActionButton">
+           <property name="text">
+            <string/>
            </property>
           </widget>
          </item>
          <item>
-          <widget class="QPushButton" name="GenerateButton" >
-           <property name="text" >
-            <string>&amp;Generate</string>
-           </property>
-          </widget>
+          <widget class="QComboBox" name="ActiveConfigurationPopup"/>
          </item>
          <item>
           <widget class="QLabel" name="Generator" >

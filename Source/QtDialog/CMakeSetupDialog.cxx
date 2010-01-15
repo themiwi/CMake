@@ -26,12 +26,14 @@
 #include <QMimeData>
 #include <QUrl>
 #include <QShortcut>
+#include <QDesktopServices>
 #include <QMacInstallDialog.h>
 
 #include "QCMake.h"
 #include "QCMakeCacheView.h"
 #include "AddCacheEntry.h"
 #include "FirstConfigure.h"
+#include "ActionButtonEventFilter.h"
 #include "cmVersion.h"
 
 QCMakeThread::QCMakeThread(QObject* p) 
@@ -55,7 +57,8 @@ void QCMakeThread::run()
 }
 
 CMakeSetupDialog::CMakeSetupDialog()
-  : ExitAfterGenerate(true), CacheModified(false), CurrentState(Interrupting)
+  : ExitAfterGenerate(true), CacheModified(false), CurrentState(Interrupting),
+    CurrentConfiguration()
 {
   QString title = QString(tr("CMake %1"));
   title = title.arg(cmVersion::GetCMakeVersion());
@@ -94,6 +97,16 @@ CMakeSetupDialog::CMakeSetupDialog()
   this->DeleteCacheAction = FileMenu->addAction(tr("&Delete Cache"));
   QObject::connect(this->DeleteCacheAction, SIGNAL(triggered(bool)), 
                    this, SLOT(doDeleteCache()));
+  FileMenu->addSeparator();
+  this->OpenSourceDirectoryAction = FileMenu->addAction(tr("Open &Source Directory"));
+  QObject::connect(this->OpenSourceDirectoryAction, SIGNAL(triggered(bool)),
+                   this, SLOT(doSourceOpen()));
+  this->OpenBuildDirectoryAction = FileMenu->addAction(tr("Open &Build Directory"));
+  QObject::connect(this->OpenBuildDirectoryAction, SIGNAL(triggered(bool)),
+                   this, SLOT(doBinaryOpen()));
+#if !defined(Q_WS_MAC)
+  FileMenu->addSeparator();
+#endif
   this->ExitAction = FileMenu->addAction(tr("E&xit"));
   QObject::connect(this->ExitAction, SIGNAL(triggered(bool)), 
                    this, SLOT(close()));
@@ -104,9 +117,32 @@ CMakeSetupDialog::CMakeSetupDialog()
   this->ConfigureAction->setMenuRole(QAction::NoRole);
   QObject::connect(this->ConfigureAction, SIGNAL(triggered(bool)), 
                    this, SLOT(doConfigure()));
+  this->StopAction = ToolsMenu->addAction(tr("&Stop"));
+  this->StopAction->setEnabled(false);
+  this->StopAction->setVisible(false);
+  QObject::connect(this->StopAction, SIGNAL(triggered(bool)),
+                   this, SLOT(doInterrupt()));
   this->GenerateAction = ToolsMenu->addAction(tr("&Generate"));
   QObject::connect(this->GenerateAction, SIGNAL(triggered(bool)), 
                    this, SLOT(doGenerate()));
+  ToolsMenu->addSeparator();
+  this->BuildAction = ToolsMenu->addAction(tr("&Build Project"));
+  QObject::connect(this->BuildAction, SIGNAL(triggered(bool)),
+                   this, SLOT(doBuild()));
+  this->InstallAction = ToolsMenu->addAction(tr("&Install Project"));
+  QObject::connect(this->InstallAction, SIGNAL(triggered(bool)),
+                   this, SLOT(doInstall()));
+  this->CleanAction = ToolsMenu->addAction(tr("&Clean Project"));
+  QObject::connect(this->CleanAction, SIGNAL(triggered(bool)),
+                   this, SLOT(doClean()));
+  ToolsMenu->addSeparator();
+  this->ActiveConfigurationMenu = ToolsMenu->addMenu(tr("Active Configuration"));
+#if !(defined(QT_MAC_USE_COCOA) && QT_VERSION == 0x040503)
+  // Don't disable the menu when using Qt-Cocoa 4.5.3:
+  // http://bugreports.qt.nokia.com/browse/QTBUG-5313
+  this->ActiveConfigurationMenu->setEnabled(false);
+#endif
+  ToolsMenu->addSeparator();
   QAction* showChangesAction = ToolsMenu->addAction(tr("&Show My Changes"));
   QObject::connect(showChangesAction, SIGNAL(triggered(bool)), 
                    this, SLOT(showUserChanges()));
@@ -159,6 +195,25 @@ CMakeSetupDialog::CMakeSetupDialog()
   this->Output->setFont(outputFont);
   this->ErrorFormat.setForeground(QBrush(Qt::red));
 
+  // set up the action-button
+  QMenu* ActionMenu = new QMenu(this->ActionButton);
+  ActionMenu->addAction(this->ConfigureAction);
+  ActionMenu->addAction(this->StopAction);
+  ActionMenu->addAction(this->GenerateAction);
+  ActionMenu->addAction(this->BuildAction);
+  ActionMenu->addAction(this->InstallAction);
+  ActionMenu->addAction(this->CleanAction);
+  this->ActionButton->setMenu(ActionMenu);
+  ActionButtonEventFilter* actionEventFilter = new ActionButtonEventFilter(this->ActionButton);
+  QObject::connect(actionEventFilter, SIGNAL(activateDefaultAction()),
+      this, SLOT(doDefaultAction()));
+  QObject::connect(actionEventFilter, SIGNAL(showMenu()),
+      this->ActionButton, SLOT(showMenu()));
+  this->ActionButton->installEventFilter(actionEventFilter);
+  this->setDefaultAction(this->ConfigureAction);
+
+  this->ActiveConfigurationPopup->setVisible(false);
+
   // start the cmake worker thread
   this->CMakeThread = new QCMakeThread(this);
   QObject::connect(this->CMakeThread, SIGNAL(cmakeInitialized()),
@@ -176,22 +231,30 @@ void CMakeSetupDialog::initialize()
       this->CacheValues->cacheModel(),
       SLOT(setProperties(const QCMakePropertyList&)));
 
-  QObject::connect(this->ConfigureButton, SIGNAL(clicked(bool)),
-                   this, SLOT(doConfigure()));
   QObject::connect(this->CMakeThread->cmakeInstance(), 
                    SIGNAL(configureDone(int)),
                    this, SLOT(finishConfigure(int)));
   QObject::connect(this->CMakeThread->cmakeInstance(),
                    SIGNAL(generateDone(int)),
                    this, SLOT(finishGenerate(int)));
-
-  QObject::connect(this->GenerateButton, SIGNAL(clicked(bool)),
-                   this, SLOT(doGenerate()));
+  QObject::connect(this->CMakeThread->cmakeInstance(),
+                   SIGNAL(buildDone(int)),
+                   this, SLOT(finishBuild(int)));
+  QObject::connect(this->CMakeThread->cmakeInstance(),
+                   SIGNAL(installDone(int)),
+                   this, SLOT(finishInstall(int)));
+  QObject::connect(this->CMakeThread->cmakeInstance(),
+                   SIGNAL(cleanDone(int)),
+                   this, SLOT(finishClean(int)));
   
   QObject::connect(this->BrowseSourceDirectoryButton, SIGNAL(clicked(bool)),
                    this, SLOT(doSourceBrowse()));
+  QObject::connect(this->OpenSourceDirectoryButton, SIGNAL(clicked(bool)),
+                   this, SLOT(doSourceOpen()));
   QObject::connect(this->BrowseBinaryDirectoryButton, SIGNAL(clicked(bool)),
                    this, SLOT(doBinaryBrowse()));
+  QObject::connect(this->OpenBinaryDirectoryButton, SIGNAL(clicked(bool)),
+                   this, SLOT(doBinaryOpen()));
   
   QObject::connect(this->BinaryDirectory, SIGNAL(editTextChanged(QString)),
                    this, SLOT(onBinaryDirectoryChanged(QString)));
@@ -266,16 +329,20 @@ CMakeSetupDialog::~CMakeSetupDialog()
   this->CMakeThread->quit();
   this->CMakeThread->wait(2000);
 }
-  
+
+void CMakeSetupDialog::doDefaultAction()
+{
+  // doing it this way so we don't have to disconnect/connect all the time when
+  // changing the default action. also prevent the action from triggering if it
+  // is disabled.
+  if(this->DefaultAction->isEnabled())
+    {
+    this->DefaultAction->trigger();
+    }
+}
+
 void CMakeSetupDialog::doConfigure()
 {
-  if(this->CurrentState == Configuring)
-    {
-    // stop configure
-    doInterrupt();
-    return;
-    }
-
   // make sure build directory exists
   QString bindir = this->CMakeThread->cmakeInstance()->binaryDirectory();
   QDir dir(bindir);
@@ -349,13 +416,57 @@ void CMakeSetupDialog::finishConfigure(int err)
 
 void CMakeSetupDialog::finishGenerate(int err)
 {
-  this->enterState(ReadyConfigure);
-  if(err != 0)
+  if(err == 0)
     {
+    this->enterState(ReadyBuild);
+    }
+  else
+    {
+    this->enterState(ReadyConfigure);
     QMessageBox::critical(this, tr("Error"), 
       tr("Error in generation process, project files may be invalid"),
       QMessageBox::Ok);
     }
+}
+
+void CMakeSetupDialog::finishBuild(int err)
+{
+  this->ProgressBar->setMaximum(100);
+  if(err == 0)
+    {
+    this->enterState(ReadyInstall);
+    }
+  else
+    {
+    this->enterState(ReadyBuild);
+    QMessageBox::critical(this, tr("Error"),
+      tr("Error in build process"),
+      QMessageBox::Ok);
+    }
+}
+
+void CMakeSetupDialog::finishInstall(int err)
+{
+  this->ProgressBar->setMaximum(100);
+  if(err != 0)
+    {
+    QMessageBox::critical(this, tr("Error"),
+      tr("Error in installation process"),
+      QMessageBox::Ok);
+    }
+  this->enterState(ReadyInstall);
+}
+
+void CMakeSetupDialog::finishClean(int err)
+{
+  this->ProgressBar->setMaximum(100);
+  if(err != 0)
+    {
+    QMessageBox::critical(this, tr("Error"),
+      tr("Error in cleaning process"),
+      QMessageBox::Ok);
+    }
+  this->enterState(ReadyBuild);
 }
 
 void CMakeSetupDialog::doInstallForCommandLine()
@@ -366,17 +477,35 @@ void CMakeSetupDialog::doInstallForCommandLine()
 
 void CMakeSetupDialog::doGenerate()
 {
-  if(this->CurrentState == Generating)
-    {
-    // stop generate
-    doInterrupt();
-    return;
-    }
   this->enterState(Generating);
   QMetaObject::invokeMethod(this->CMakeThread->cmakeInstance(),
     "generate", Qt::QueuedConnection);
 }
-  
+
+void CMakeSetupDialog::doBuild()
+{
+  this->enterState(Building);
+  this->ProgressBar->setMaximum(0);
+  QMetaObject::invokeMethod(this->CMakeThread->cmakeInstance(),
+    "build", Qt::QueuedConnection, Q_ARG(QString, this->CurrentConfiguration));
+}
+
+void CMakeSetupDialog::doInstall()
+{
+  this->enterState(Installing);
+  this->ProgressBar->setMaximum(0);
+  QMetaObject::invokeMethod(this->CMakeThread->cmakeInstance(),
+    "install", Qt::QueuedConnection, Q_ARG(QString, this->CurrentConfiguration));
+}
+
+void CMakeSetupDialog::doClean()
+{
+  this->enterState(Cleaning);
+  this->ProgressBar->setMaximum(0);
+  QMetaObject::invokeMethod(this->CMakeThread->cmakeInstance(),
+    "clean", Qt::QueuedConnection, Q_ARG(QString, this->CurrentConfiguration));
+}
+
 void CMakeSetupDialog::closeEvent(QCloseEvent* e)
 {
   // prompt for close if there are unsaved changes, and we're not busy
@@ -475,6 +604,15 @@ void CMakeSetupDialog::doSourceBrowse()
     }
 }
 
+void CMakeSetupDialog::doSourceOpen()
+{
+  QString srcdir = this->SourceDirectory->text();
+  if(!srcdir.isEmpty())
+    {
+    QDesktopServices::openUrl(QUrl("file:/"+srcdir, QUrl::TolerantMode));
+    }
+}
+
 void CMakeSetupDialog::updateSourceDirectory(const QString& dir)
 {
   if(this->SourceDirectory->text() != dir)
@@ -505,6 +643,15 @@ void CMakeSetupDialog::doBinaryBrowse()
     }
 }
 
+void CMakeSetupDialog::doBinaryOpen()
+{
+  QString bindir = this->BinaryDirectory->currentText();
+  if(!bindir.isEmpty())
+    {
+    QDesktopServices::openUrl(QUrl("file:/"+bindir, QUrl::TolerantMode));
+    }
+}
+
 void CMakeSetupDialog::setBinaryDirectory(const QString& dir)
 {
   this->BinaryDirectory->setEditText(dir);
@@ -530,6 +677,8 @@ void CMakeSetupDialog::onBinaryDirectoryChanged(const QString& dir)
   this->Output->clear();
   QMetaObject::invokeMethod(this->CMakeThread->cmakeInstance(),
     "setBinaryDirectory", Qt::QueuedConnection, Q_ARG(QString, dir));
+
+  this->enterState(ReadyConfigure);
 }
 
 void CMakeSetupDialog::setSourceDirectory(const QString& dir)
@@ -539,6 +688,7 @@ void CMakeSetupDialog::setSourceDirectory(const QString& dir)
 
 void CMakeSetupDialog::showProgress(const QString& /*msg*/, float percent)
 {
+  this->ProgressBar->setMaximum(100);
   this->ProgressBar->setValue(qRound(percent * 100));
 }
 
@@ -556,7 +706,7 @@ void CMakeSetupDialog::message(const QString& msg)
 
 void CMakeSetupDialog::setEnabledState(bool enabled)
 {
-  // disable parts of the GUI during configure/generate
+  // disable parts of the GUI during configure/generate/build/install/clean
   this->CacheValues->cacheModel()->setEditEnabled(enabled);
   this->SourceDirectory->setEnabled(enabled);
   this->BrowseSourceDirectoryButton->setEnabled(enabled);
@@ -566,8 +716,32 @@ void CMakeSetupDialog::setEnabledState(bool enabled)
   this->DeleteCacheAction->setEnabled(enabled);
   this->ExitAction->setEnabled(enabled);
   this->ConfigureAction->setEnabled(enabled);
+  this->ActionButton->setEnabled(true);
+  this->GenerateAction->setEnabled(false);
+  this->BuildAction->setEnabled(false);
+  this->InstallAction->setEnabled(false);
+  this->CleanAction->setEnabled(false);
+  this->StopAction->setVisible(false);
+  this->StopAction->setEnabled(false);
   this->AddEntry->setEnabled(enabled);
   this->RemoveEntry->setEnabled(false);  // let selection re-enable it
+  if(enabled)
+    {
+    this->manageConfigs();
+    }
+  else
+    {
+    this->ActiveConfigurationPopup->setEnabled(false);
+#if !(defined(QT_MAC_USE_COCOA) && QT_VERSION == 0x040503)
+    // don't disable the menu when using Qt-Cocoa 4.5.3:
+    // http://bugreports.qt.nokia.com/browse/QTBUG-5313
+    this->ActiveConfigurationMenu->setEnabled(false);
+#else
+    // do it the dedious way: disable all child-actions
+    foreach(QAction* a, this->ActiveConfigurationMenu->actions())
+      a->setEnabled(false);
+#endif
+    }
 }
 
 bool CMakeSetupDialog::setupFirstConfigure()
@@ -744,7 +918,9 @@ void CMakeSetupDialog::addBinaryPath(const QString& path)
 void CMakeSetupDialog::dragEnterEvent(QDragEnterEvent* e)
 {
   if(!(this->CurrentState == ReadyConfigure || 
-     this->CurrentState == ReadyGenerate))
+     this->CurrentState == ReadyGenerate ||
+     this->CurrentState == ReadyBuild ||
+     this->CurrentState == ReadyInstall))
     {
     e->ignore();
     return;
@@ -768,7 +944,9 @@ void CMakeSetupDialog::dragEnterEvent(QDragEnterEvent* e)
 void CMakeSetupDialog::dropEvent(QDropEvent* e)
 {
   if(!(this->CurrentState == ReadyConfigure || 
-     this->CurrentState == ReadyGenerate))
+     this->CurrentState == ReadyGenerate ||
+     this->CurrentState == ReadyBuild ||
+     this->CurrentState == ReadyInstall))
     {
     return;
     }
@@ -854,7 +1032,9 @@ void CMakeSetupDialog::selectionChanged()
   QModelIndexList idxs = this->CacheValues->selectionModel()->selectedRows();
   if(idxs.count() && 
       (this->CurrentState == ReadyConfigure || 
-       this->CurrentState == ReadyGenerate) )
+       this->CurrentState == ReadyGenerate ||
+       this->CurrentState == ReadyBuild ||
+       this->CurrentState == ReadyInstall) )
     {
     this->RemoveEntry->setEnabled(true);
     }
@@ -873,46 +1053,129 @@ void CMakeSetupDialog::enterState(CMakeSetupDialog::State s)
 
   this->CurrentState = s;
 
-  if(s == Interrupting)
+  switch(s)
     {
-    this->ConfigureButton->setEnabled(false);
-    this->GenerateButton->setEnabled(false);
+    case Interrupting:
+      this->ActionButton->setEnabled(false);
+      break;
+    case Configuring:
+    case Generating:
+    case Building:
+    case Installing:
+    case Cleaning:
+      this->Output->clear();
+      this->setEnabledState(false);
+      this->StopAction->setEnabled(true);
+      this->StopAction->setVisible(true);
+      this->setDefaultAction(this->StopAction);
+      break;
+    case ReadyConfigure:
+      this->ProgressBar->reset();
+      this->setEnabledState(true);
+      this->setDefaultAction(this->ConfigureAction);
+      break;
+    case ReadyGenerate:
+      this->ProgressBar->reset();
+      this->setEnabledState(true);
+      this->GenerateAction->setEnabled(true);
+      this->CleanAction->setEnabled(false);
+      this->setDefaultAction(this->GenerateAction);
+      break;
+    case ReadyBuild:
+      this->ProgressBar->reset();
+      this->setEnabledState(true);
+      this->GenerateAction->setEnabled(true);
+      this->BuildAction->setEnabled(true);
+      this->CleanAction->setEnabled(true);
+      this->setDefaultAction(this->BuildAction);
+      break;
+    case ReadyInstall:
+      this->ProgressBar->reset();
+      this->setEnabledState(true);
+      this->GenerateAction->setEnabled(true);
+      this->BuildAction->setEnabled(true);
+      this->InstallAction->setEnabled(true);
+      this->CleanAction->setEnabled(true);
+      this->setDefaultAction(this->InstallAction);
+      break;
     }
-  else if(s == Configuring)
+}
+
+void CMakeSetupDialog::setDefaultAction(QAction* action)
+{
+  this->DefaultAction = action;
+  this->ActionButton->setText(action->text());
+}
+
+void CMakeSetupDialog::manageConfigs()
+{
+  QCMakePropertyList props = this->CacheValues->cacheModel()->properties();
+  QStringList configs;
+  foreach(QCMakeProperty p, props)
     {
-    this->Output->clear();
-    this->setEnabledState(false);
-    this->GenerateButton->setEnabled(false);
-    this->GenerateAction->setEnabled(false);
-    this->ConfigureButton->setText(tr("&Stop"));
+    if(p.Key == "CMAKE_CONFIGURATION_TYPES")
+      {
+      // p.Strings seems to be always empty...
+      configs = p.Value.toString().split(";");
+      break;
+      }
     }
-  else if(s == Generating)
+  // always rebuild menu and combobox from scratch (easier...)
+  // first check that we have in fact a multi-config generator
+  if(configs.length() > 0)
     {
-    this->CacheModified = false;
-    this->setEnabledState(false);
-    this->ConfigureButton->setEnabled(false);
-    this->GenerateAction->setEnabled(false);
-    this->GenerateButton->setText(tr("&Stop"));
+    // figure out what the index of the current configuration is in the new set
+    int curIdx = -1;
+    if(!this->CurrentConfiguration.isEmpty())
+      {
+      curIdx = configs.indexOf(this->CurrentConfiguration);
+      }
+    if(curIdx < 0)
+      {
+      this->CurrentConfiguration = "";
+      curIdx = 0;
+      }
+    // now clear out the menu, the action group and the combo box
+    this->ActiveConfigurationMenu->clear();
+    this->ActiveConfigurationPopup->clear();
+    this->ConfigurationActions.clear();
+    // this also deletes the actions (they are children of the old ActionGroup)!
+    this->ConfigurationActionsGroup = QSharedPointer<QActionGroup>(new QActionGroup(NULL));
+    this->ConfigurationActionsGroup->setExclusive(true);
+    // now populate
+    size_t i = 0;
+    foreach(QString c, configs)
+      {
+      QAction* act = new QAction(c, this->ConfigurationActionsGroup.data());
+      act->setCheckable(true);
+      this->ConfigurationActionsGroup->addAction(act);
+      this->ConfigurationActions.append(act);
+      this->ActiveConfigurationMenu->addAction(act);
+      this->ActiveConfigurationPopup->addItem(c);
+      QObject::connect(act, SIGNAL(triggered(bool)), this, SLOT(activeConfigurationChanged(bool)));
+      ++i;
+      }
+    this->ConfigurationActions[curIdx]->setChecked(true);
+    this->ActiveConfigurationPopup->setCurrentIndex(curIdx);
+    QObject::connect(this->ActiveConfigurationPopup, SIGNAL(currentIndexChanged(int)),
+        this, SLOT(activeConfigurationChanged(int)));
+    this->ActiveConfigurationPopup->setVisible(true);
+    this->ActiveConfigurationPopup->setEnabled(true);
+    this->ActiveConfigurationMenu->setEnabled(true);
     }
-  else if(s == ReadyConfigure)
+  else
     {
-    this->ProgressBar->reset();
-    this->setEnabledState(true);
-    this->GenerateButton->setEnabled(false);
-    this->GenerateAction->setEnabled(false);
-    this->ConfigureButton->setEnabled(true);
-    this->ConfigureButton->setText(tr("&Configure"));
-    this->GenerateButton->setText(tr("&Generate"));
-    }
-  else if(s == ReadyGenerate)
-    {
-    this->ProgressBar->reset();
-    this->setEnabledState(true);
-    this->GenerateButton->setEnabled(true);
-    this->GenerateAction->setEnabled(true);
-    this->ConfigureButton->setEnabled(true);
-    this->ConfigureButton->setText(tr("&Configure"));
-    this->GenerateButton->setText(tr("&Generate"));
+    // nope, disable
+    this->ActiveConfigurationPopup->clear();
+    this->ActiveConfigurationMenu->clear();
+    this->ActiveConfigurationPopup->setVisible(false);
+    this->ActiveConfigurationPopup->setEnabled(false);
+#if !(defined(QT_MAC_USE_COCOA) && QT_VERSION == 0x040503)
+  // Don't disable the menu when using Qt-Cocoa 4.5.3:
+  // http://bugreports.qt.nokia.com/browse/QTBUG-5313
+    this->ActiveConfigurationMenu->setEnabled(false);
+#endif
+    this->CurrentConfiguration = "";
     }
 }
 
@@ -1048,4 +1311,26 @@ void CMakeSetupDialog::setSearchFilter(const QString& str)
   this->CacheValues->setSearchFilter(str);
 }
 
+void CMakeSetupDialog::activeConfigurationChanged(bool checked)
+{
+  if(checked)
+    {
+    for(int i=0; i < this->ConfigurationActions.length(); ++i)
+      if(this->ConfigurationActions[i]->isChecked())
+        {
+        this->activeConfigurationChanged(i);
+        break;
+        }
+    }
+}
+
+void CMakeSetupDialog::activeConfigurationChanged(int index)
+{
+  if(index > -1)
+    {
+    this->ConfigurationActions[index]->setChecked(true);
+    this->ActiveConfigurationPopup->setCurrentIndex(index);
+    this->CurrentConfiguration = this->ActiveConfigurationPopup->currentText();
+    }
+}
 

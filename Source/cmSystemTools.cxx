@@ -124,8 +124,10 @@ const char* cmSystemTools::GetWindows9xComspecSubstitute()
 void (*cmSystemTools::s_ErrorCallback)(const char*, const char*, 
                                        bool&, void*);
 void (*cmSystemTools::s_StdoutCallback)(const char*, int len, void*);
+bool (*cmSystemTools::s_KillChildCallback)(void*);
 void* cmSystemTools::s_ErrorCallbackClientData = 0;
 void* cmSystemTools::s_StdoutCallbackClientData = 0;
+void* cmSystemTools::s_KillChildCallbackClientData = 0;
 
 // replace replace with with as many times as it shows up in source.
 // write the result into source.
@@ -296,6 +298,21 @@ void cmSystemTools::Stdout(const char* s, int length)
     std::cout.write(s, length);
     std::cout.flush();
     }
+}
+
+void cmSystemTools::SetKillChildCallback(KillChildCallback f, void* clientData)
+{
+  s_KillChildCallback = f;
+  s_KillChildCallbackClientData = clientData;
+}
+
+bool cmSystemTools::ExecuteKillChildCallback()
+{
+  if(s_KillChildCallback)
+  {
+    return (*s_KillChildCallback)(s_KillChildCallbackClientData);
+  }
+  return false;
 }
 
 void cmSystemTools::Message(const char* m1, const char *title)
@@ -612,8 +629,6 @@ bool cmSystemTools::RunSingleCommand(std::vector<cmStdString>const& command,
   std::vector<char> tempOutput;
   char* data;
   int length;
-  if ( output || verbose )
-    {
   while(cmsysProcess_WaitForData(cp, &data, &length, 0))
     {
     if(output || verbose)
@@ -637,7 +652,11 @@ bool cmSystemTools::RunSingleCommand(std::vector<cmStdString>const& command,
       {
       cmSystemTools::Stdout(data, length);
       }
-    }
+    if(cmSystemTools::ExecuteKillChildCallback())
+      {
+      cmsysProcess_Kill(cp);
+      break;
+      }
     }
   
   cmsysProcess_WaitForExit(cp, 0);

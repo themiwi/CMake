@@ -76,9 +76,15 @@ public slots:
   void configure();
   /// generate the files
   void generate();
+  /// build the project
+  void build(QString config);
+  /// install the project
+  void install(QString config);
+  /// clean the project
+  void clean(QString config);
   /// set the property values
   void setProperties(const QCMakePropertyList&);
-  /// interrupt the configure or generate process
+  /// interrupt the configure, generate, build or install process
   void interrupt();
   /// delete the cache in binary directory
   void deleteCache();
@@ -119,6 +125,12 @@ signals:
   void configureDone(int error);
   /// signal when generate is done
   void generateDone(int error);
+  /// signal when build is done
+  void buildDone(int error);
+  /// signal when install is done
+  void installDone(int error);
+  /// signal when clean is done
+  void cleanDone(int error);
   /// signal when there is an output message
   void outputMessage(const QString& msg);
   /// signal when there is an error message
@@ -132,12 +144,18 @@ protected:
   static void progressCallback(const char* msg, float percent, void* cd);
   static void errorCallback(const char* msg, const char* title, 
                             bool&, void* cd);
+  static void stdoutCallback(const char* data, int length, void* cd);
+  static bool killChildCallback(void* cd);
+  void flushOutputBuffer();
   bool SuppressDevWarnings;
   QString SourceDirectory;
   QString BinaryDirectory;
   QString Generator;
   QStringList AvailableGenerators;
   QString CMakeExecutable;
+  QString OutputBuffer;
+  bool CanParseProgress;
+  bool ShouldKillChild;
 };
 
 #endif // __QCMake_h
