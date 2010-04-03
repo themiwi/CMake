@@ -54,10 +54,14 @@ public:
   bool EndTest(size_t completed, size_t total, bool started);
   //Called by ctest -N to log the command string
   void ComputeArguments();
+
+  void ComputeWeightedCost();
 private:
   void DartProcessing();
   void ExeNotFound(std::string exe);
-  bool CreateProcess(double testTimeOut,
+  // Figures out a final timeout which is min(STOP_TIME, NOW+TIMEOUT)
+  double ResolveTimeout();
+  bool ForkProcess(double testTimeOut,
                      std::vector<std::string>* environment);
   void WriteLogOutputTop(size_t completed, size_t total);
   //Run post processing of the process output for MemCheck
@@ -73,14 +77,9 @@ private:
   //if this option is set to false.)
   //bool OptimizeForCTest;
 
-  //flag for whether the env was modified for this run
-  bool ModifyEnv;
-
   bool UsePrefixCommand;
   std::string PrefixCommand;
 
-  //stores the original environment if we are modifying it
-  std::vector<std::string> OrigEnv;
   std::string ProcessOutput;
   std::string CompressedOutput;
   double CompressionRatio;

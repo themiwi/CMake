@@ -7,6 +7,9 @@
 SourceDirectory: @PROJECT_SOURCE_DIR@
 BuildDirectory: @PROJECT_BINARY_DIR@
 
+# Where to place the cost data store
+CostDataFile: @CTEST_COST_DATA_FILE@
+
 # Site is something like machine.domain, i.e. pragmatic.crd
 Site: @SITE@
 

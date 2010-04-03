@@ -214,6 +214,9 @@ public:
 
   std::string GetCDashVersion();
 
+  std::string GetStopTime() { return this->StopTime; }
+  void SetStopTime(std::string time);
+
   //Used for parallel ctest job scheduling
   std::string GetScheduleType() { return this->ScheduleType; }
   void SetScheduleType(std::string type) { this->ScheduleType = type; }
@@ -398,9 +401,13 @@ public:
     { this->StreamOut = out; this->StreamErr = err; }
   void AddSiteProperties(std::ostream& );
   bool GetLabelSummary() { return this->LabelSummary;}
+
+  std::string GetCostDataFile();
 private:
   std::string ConfigType;
   std::string ScheduleType;
+  std::string StopTime;
+  bool NextDayStopTime;
   bool Verbose;
   bool ExtraVerbose;
   bool ProduceXML;
@@ -417,6 +424,8 @@ private:
   bool ComputedCompressOutput;
 
   int GenerateNotesFile(const char* files);
+
+  void DetermineNextDayStop();
 
   // these are helper classes
   typedef std::map<cmStdString,cmCTestGenericHandler*> t_TestingHandlers;
@@ -447,6 +456,8 @@ private:
   double                  TimeOut;
 
   double                  GlobalTimeout;
+
+  int                     LastStopTimeout;
 
   int                     MaxTestNameWidth;
 

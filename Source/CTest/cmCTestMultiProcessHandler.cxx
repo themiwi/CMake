@@ -16,6 +16,7 @@
 #include "cmSystemTools.h"
 #include <stdlib.h>
 #include <stack>
+#include <float.h>
 
 cmCTestMultiProcessHandler::cmCTestMultiProcessHandler()
 {
@@ -76,6 +77,7 @@ void cmCTestMultiProcessHandler::RunTests()
     {
     }
   this->MarkFinished();
+  this->UpdateCostData();
 }
 
 //---------------------------------------------------------
@@ -93,12 +95,16 @@ void cmCTestMultiProcessHandler::StartTestProcess(int test)
   std::string current_dir = cmSystemTools::GetCurrentWorkingDirectory();
   cmSystemTools::ChangeDirectory(this->Properties[test]->Directory.c_str());
 
+  // Lock the resources we'll be using
+  this->LockResources(test);
+
   if(testRun->StartTest(this->Total))
     {
     this->RunningTests.insert(testRun);
     }
   else
     {
+    this->UnlockResources(test);
     this->Completed++;
     this->TestFinishMap[test] = true;
     this->TestRunningMap[test] = false;
@@ -108,6 +114,28 @@ void cmCTestMultiProcessHandler::StartTestProcess(int test)
     delete testRun;
     }
   cmSystemTools::ChangeDirectory(current_dir.c_str());
+}
+
+//---------------------------------------------------------
+void cmCTestMultiProcessHandler::LockResources(int index)
+{
+  for(std::set<std::string>::iterator i =
+      this->Properties[index]->LockedResources.begin();
+      i != this->Properties[index]->LockedResources.end(); ++i)
+    {
+    this->LockedResources.insert(*i);
+    }
+}
+
+//---------------------------------------------------------
+void cmCTestMultiProcessHandler::UnlockResources(int index)
+{
+  for(std::set<std::string>::iterator i =
+      this->Properties[index]->LockedResources.begin();
+      i != this->Properties[index]->LockedResources.end(); ++i)
+    {
+    this->LockedResources.erase(*i);
+    }
 }
 
 //---------------------------------------------------------
@@ -144,6 +172,17 @@ inline size_t cmCTestMultiProcessHandler::GetProcessorsUsed(int test)
 //---------------------------------------------------------
 bool cmCTestMultiProcessHandler::StartTest(int test)
 {
+  //Check for locked resources
+  for(std::set<std::string>::iterator i =
+      this->Properties[test]->LockedResources.begin();
+      i != this->Properties[test]->LockedResources.end(); ++i)
+    {
+    if(this->LockedResources.find(*i) != this->LockedResources.end())
+      {
+      return false;
+      }
+    }
+
   // copy the depend tests locally because when 
   // a test is finished it will be removed from the depend list
   // and we don't want to be iterating a list while removing from it
@@ -272,8 +311,7 @@ bool cmCTestMultiProcessHandler::CheckOutput()
     this->TestRunningMap[test] = false;
     this->RunningTests.erase(p);
     this->WriteCheckpoint(test);
-    this->WriteCostData(test, static_cast<float>(
-      p->GetTestResults().ExecutionTime));
+    this->UnlockResources(test);
     this->RunningCount -= GetProcessorsUsed(test);
     delete p;
     }
@@ -281,32 +319,132 @@ bool cmCTestMultiProcessHandler::CheckOutput()
 }
 
 //---------------------------------------------------------
+void cmCTestMultiProcessHandler::UpdateCostData()
+{
+  std::string fname = this->CTest->GetCostDataFile();
+  std::string tmpout = fname + ".tmp";
+  std::fstream fout;
+  fout.open(tmpout.c_str(), std::ios::out);
+
+  PropertiesMap temp = this->Properties;
+
+  if(cmSystemTools::FileExists(fname.c_str()))
+    {
+    std::ifstream fin;
+    fin.open(fname.c_str());
+
+    std::string line;
+    while(std::getline(fin, line))
+      {
+      if(line == "---") break;
+      std::vector<cmsys::String> parts = 
+        cmSystemTools::SplitString(line.c_str(), ' ');
+      //Format: <name> <previous_runs> <avg_cost>
+      if(parts.size() < 3) break;
+
+      std::string name = parts[0];
+      int prev = atoi(parts[1].c_str());
+      float cost = static_cast<float>(atof(parts[2].c_str()));
+
+      int index = this->SearchByName(name);
+      if(index == -1)
+        {
+        // This test is not in memory. We just rewrite the entry
+        fout << name << " " << prev << " " << cost << "\n";
+        }
+      else
+        {
+        // Update with our new average cost
+        fout << name << " " << this->Properties[index]->PreviousRuns << " "
+          << this->Properties[index]->Cost << "\n";
+        temp.erase(index);
+        }
+      }
+    fin.close();
+    cmSystemTools::RemoveFile(fname.c_str());
+    }
+
+  // Add all tests not previously listed in the file
+  for(PropertiesMap::iterator i = temp.begin(); i != temp.end(); ++i)
+    {
+    fout << i->second->Name << " " << i->second->PreviousRuns << " "
+      << i->second->Cost << "\n";
+    }
+
+  // Write list of failed tests
+  fout << "---\n";
+  for(std::vector<cmStdString>::iterator i = this->Failed->begin();
+      i != this->Failed->end(); ++i)
+    {
+    fout << i->c_str() << "\n";
+    }
+  fout.close();
+  cmSystemTools::RenameFile(tmpout.c_str(), fname.c_str());
+}
+
+//---------------------------------------------------------
 void cmCTestMultiProcessHandler::ReadCostData()
 {
-  std::string fname = this->CTest->GetBinaryDir()
-    + "/Testing/Temporary/CTestCostData.txt";
+  std::string fname = this->CTest->GetCostDataFile();
 
-  if(cmSystemTools::FileExists(fname.c_str(), true)
-     && this->ParallelLevel > 1)
-    {       
+  if(cmSystemTools::FileExists(fname.c_str(), true))
+    {
     std::ifstream fin;
     fin.open(fname.c_str());
     std::string line;
     while(std::getline(fin, line))
       {
-      std::vector<cmsys::String> parts = 
+      if(line == "---") break;
+
+      std::vector<cmsys::String> parts =
         cmSystemTools::SplitString(line.c_str(), ' ');
 
-      int index = atoi(parts[0].c_str());
-      float cost = static_cast<float>(atof(parts[1].c_str()));
+      // Probably an older version of the file, will be fixed next run
+      if(parts.size() < 3)
+        {
+        fin.close();
+        return;
+        }
+
+      std::string name = parts[0];
+      int prev = atoi(parts[1].c_str());
+      float cost = static_cast<float>(atof(parts[2].c_str()));
+
+      int index = this->SearchByName(name);
+      if(index == -1) continue;
+
+      this->Properties[index]->PreviousRuns = prev;
       if(this->Properties[index] && this->Properties[index]->Cost == 0)
         {
         this->Properties[index]->Cost = cost;
         }
       }
+    // Next part of the file is the failed tests
+    while(std::getline(fin, line))
+      {
+      if(line != "")
+        {
+        this->LastTestsFailed.push_back(line);
+        }
+      }
     fin.close();
     }
-  cmSystemTools::RemoveFile(fname.c_str());
+}
+
+//---------------------------------------------------------
+int cmCTestMultiProcessHandler::SearchByName(std::string name)
+{
+  int index = -1;
+
+  for(PropertiesMap::iterator i = this->Properties.begin();
+      i != this->Properties.end(); ++i)
+    {
+    if(i->second->Name == name)
+      {
+      index = i->first;
+      }
+    }
+  return index;
 }
 
 //---------------------------------------------------------
@@ -315,19 +453,17 @@ void cmCTestMultiProcessHandler::CreateTestCostList()
   for(TestMap::iterator i = this->Tests.begin();
       i != this->Tests.end(); ++i)
     {
-    this->TestCosts[this->Properties[i->first]->Cost].insert(i->first);
+    std::string name = this->Properties[i->first]->Name;
+    if(std::find(this->LastTestsFailed.begin(), this->LastTestsFailed.end(),
+       name) != this->LastTestsFailed.end())
+      {
+      this->TestCosts[FLT_MAX].insert(i->first);
+      }
+    else
+      {
+      this->TestCosts[this->Properties[i->first]->Cost].insert(i->first);
+      }
     }
-}
-
-//---------------------------------------------------------
-void cmCTestMultiProcessHandler::WriteCostData(int index, float cost)
-{
-  std::string fname = this->CTest->GetBinaryDir()
-    + "/Testing/Temporary/CTestCostData.txt";
-  std::fstream fout;
-  fout.open(fname.c_str(), std::ios::out | std::ios::app);
-  fout << index << " " << cost << "\n";
-  fout.close();
 }
 
 //---------------------------------------------------------
@@ -336,7 +472,7 @@ void cmCTestMultiProcessHandler::WriteCheckpoint(int index)
   std::string fname = this->CTest->GetBinaryDir()
     + "/Testing/Temporary/CTestCheckpoint.txt";
   std::fstream fout;
-  fout.open(fname.c_str(), std::ios::app);
+  fout.open(fname.c_str(), std::ios::app | std::ios::out);
   fout << index << "\n";
   fout.close();
 }

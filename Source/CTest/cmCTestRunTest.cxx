@@ -14,6 +14,7 @@
 #include "cmCTestMemCheckHandler.h"
 #include "cmCTest.h"
 #include "cmSystemTools.h"
+#include "cm_curl.h"
 
 #include <cm_zlib.h>
 #include <cmsys/Base64.h>
@@ -22,7 +23,6 @@ cmCTestRunTest::cmCTestRunTest(cmCTestTestHandler* handler)
 {
   this->CTest = handler->CTest;
   this->TestHandler = handler;
-  this->ModifyEnv = false;
   this->TestProcess = 0;
   this->TestResult.ExecutionTime =0;
   this->TestResult.ReturnValue = 0;
@@ -138,11 +138,6 @@ bool cmCTestRunTest::EndTest(size_t completed, size_t total, bool started)
     this->CompressOutput();
     }
 
-  //restore the old environment
-  if (this->ModifyEnv)
-    {
-    cmSystemTools::RestoreEnv(this->OrigEnv);
-    }
   this->WriteLogOutputTop(completed, total);
   std::string reason;
   bool passed = true;
@@ -334,6 +329,7 @@ bool cmCTestRunTest::EndTest(size_t completed, size_t total, bool started)
     this->TestResult.CompletionStatus = "Completed";
     this->TestResult.ExecutionTime = this->TestProcess->GetTotalTime();
     this->MemCheckPostProcess();
+    this->ComputeWeightedCost();
     }
   // Always push the current TestResult onto the
   // TestHandler vector
@@ -342,7 +338,21 @@ bool cmCTestRunTest::EndTest(size_t completed, size_t total, bool started)
   return passed;
 }
 
-//--------------------------------------------------------------
+//----------------------------------------------------------------------
+void cmCTestRunTest::ComputeWeightedCost()
+{
+  int prev = this->TestProperties->PreviousRuns;
+  float avgcost = this->TestProperties->Cost;
+  double current = this->TestResult.ExecutionTime;
+
+  if(this->TestResult.Status == cmCTestTestHandler::COMPLETED)
+    {
+    this->TestProperties->Cost = ((prev * avgcost) + current) / (prev + 1);
+    this->TestProperties->PreviousRuns++;
+    }
+}
+
+//----------------------------------------------------------------------
 void cmCTestRunTest::MemCheckPostProcess()
 {
   if(!this->TestHandler->MemCheck)
@@ -426,13 +436,14 @@ bool cmCTestRunTest::StartTest(size_t total)
     }
   this->StartTime = this->CTest->CurrentTime();
 
-  return this->CreateProcess(this->TestProperties->Timeout,
+  return this->ForkProcess(this->ResolveTimeout(),
                              &this->TestProperties->Environment);
 }
 
+//----------------------------------------------------------------------
 void cmCTestRunTest::ComputeArguments()
 {
-  std::vector<std::string>::const_iterator j = 
+  std::vector<std::string>::const_iterator j =
     this->TestProperties->Args.begin();
   ++j; // skip test name
 
@@ -447,7 +458,7 @@ void cmCTestRunTest::ComputeArguments()
     }
   else
     {
-    this->ActualCommand = 
+    this->ActualCommand =
       this->TestHandler->FindTheExecutable(
       this->TestProperties->Args[1].c_str());
     ++j; //skip the executable (it will be actualCommand)
@@ -502,7 +513,71 @@ void cmCTestRunTest::DartProcessing()
 }
 
 //----------------------------------------------------------------------
-bool cmCTestRunTest::CreateProcess(double testTimeOut,
+double cmCTestRunTest::ResolveTimeout()
+{
+  double timeout = this->TestProperties->Timeout;
+
+  if(this->CTest->GetStopTime() == "")
+    {
+    return timeout;
+    }
+  struct tm* lctime;
+  time_t current_time = time(0);
+  lctime = gmtime(&current_time);
+  int gm_hour = lctime->tm_hour;
+  time_t gm_time = mktime(lctime);
+  lctime = localtime(&current_time);
+  int local_hour = lctime->tm_hour;
+
+  int tzone_offset = local_hour - gm_hour;
+  if(gm_time > current_time && gm_hour < local_hour)
+    {
+    // this means gm_time is on the next day
+    tzone_offset -= 24;
+    }
+  else if(gm_time < current_time && gm_hour > local_hour)
+    {
+    // this means gm_time is on the previous day
+    tzone_offset += 24;
+    }
+
+  tzone_offset *= 100;
+  char buf[1024];
+  // add todays year day and month to the time in str because
+  // curl_getdate no longer assumes the day is today
+  sprintf(buf, "%d%02d%02d %s %+05i",
+          lctime->tm_year + 1900,
+          lctime->tm_mon + 1,
+          lctime->tm_mday,
+          this->CTest->GetStopTime().c_str(),
+          tzone_offset);
+
+  time_t stop_time = curl_getdate(buf, &current_time);
+  if(stop_time == -1)
+    {
+    return timeout;
+    }
+
+  //the stop time refers to the next day
+  if(this->CTest->NextDayStopTime)
+    {
+    stop_time += 24*60*60;
+    }
+  int stop_timeout = (stop_time - current_time) % (24*60*60);
+  this->CTest->LastStopTimeout = stop_timeout;
+
+  if(stop_timeout <= 0 || stop_timeout > this->CTest->LastStopTimeout)
+    {
+    cmCTestLog(this->CTest, ERROR_MESSAGE, "The stop time has been passed. "
+      "Exiting ctest." << std::endl);
+    exit(-1);
+    }
+  return timeout == 0 ? stop_timeout :
+    (timeout < stop_timeout ? timeout : stop_timeout);
+}
+
+//----------------------------------------------------------------------
+bool cmCTestRunTest::ForkProcess(double testTimeOut,
                      std::vector<std::string>* environment)
 {
   this->TestProcess = new cmProcess;
@@ -511,9 +586,6 @@ bool cmCTestRunTest::CreateProcess(double testTimeOut,
         this->TestProperties->Directory.c_str());
   this->TestProcess->SetCommand(this->ActualCommand.c_str());
   this->TestProcess->SetCommandArguments(this->Arguments);
-
-  std::vector<std::string> origEnv;
-  this->ModifyEnv = (environment && environment->size()>0);
 
   // determine how much time we have
   double timeout = this->CTest->GetRemainingTimeAllowed() - 120;
@@ -537,9 +609,13 @@ bool cmCTestRunTest::CreateProcess(double testTimeOut,
 
   this->TestProcess->SetTimeout(timeout);
 
-  if (this->ModifyEnv)
+#ifdef CMAKE_BUILD_WITH_CMAKE
+  cmSystemTools::SaveRestoreEnvironment sre;
+#endif
+
+  if (environment && environment->size()>0)
     {
-    this->OrigEnv = cmSystemTools::AppendEnv(environment);
+    cmSystemTools::AppendEnv(environment);
     }
 
   return this->TestProcess->StartProcess();

@@ -55,8 +55,7 @@ public:
 
   cmCTestTestHandler * GetTestHandler()
   { return this->TestHandler; }
-protected:  
-  cmCTest* CTest;
+protected:
   // Start the next test or tests as many as are allowed by
   // ParallelLevel
   void StartNextTests();
@@ -64,8 +63,12 @@ protected:
   bool StartTest(int test);
   // Mark the checkpoint for the given test
   void WriteCheckpoint(int index);
-  void WriteCostData(int index, float cost);
+
+  void UpdateCostData();
   void ReadCostData();
+  // Return index of a test based on its name
+  int SearchByName(std::string name);
+
   void CreateTestCostList();
   // Removes the checkpoint file
   void MarkFinished();
@@ -80,6 +83,9 @@ protected:
   bool CheckCycles();
   int FindMaxIndex();
   inline size_t GetProcessorsUsed(int index);
+
+  void LockResources(int index);
+  void UnlockResources(int index);
   // map from test number to set of depend tests
   TestMap Tests;
   TestCostMap TestCosts;
@@ -95,10 +101,13 @@ protected:
   std::map<int, cmStdString> TestOutput;
   std::vector<cmStdString>* Passed;
   std::vector<cmStdString>* Failed;
+  std::vector<std::string> LastTestsFailed;
+  std::set<std::string> LockedResources;
   std::vector<cmCTestTestHandler::cmCTestTestResult>* TestResults;
   size_t ParallelLevel; // max number of process that can be run at once
   std::set<cmCTestRunTest*> RunningTests;  // current running tests
   cmCTestTestHandler * TestHandler;
+  cmCTest* CTest;
 };
 
 #endif

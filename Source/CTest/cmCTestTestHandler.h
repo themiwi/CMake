@@ -96,6 +96,7 @@ public:
     bool IsInBasedOnREOptions;
     bool WillFail;
     float Cost;
+    int PreviousRuns;
     bool RunSerial;
     double Timeout;
     int Index;
@@ -103,6 +104,7 @@ public:
     int Processors;
     std::vector<std::string> Environment;
     std::vector<std::string> Labels;
+    std::set<std::string> LockedResources;
   };
 
   struct cmCTestTestResult

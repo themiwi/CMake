@@ -1268,10 +1268,10 @@ ${CMake_BINARY_DIR}/bin/cmake -DVERSION=master -P ${CMake_SOURCE_DIR}/Utilities/
     --output-log "${CMake_BINARY_DIR}/Tests/CTestTestBadExe/testOutput.log"
     )
   SET(CTestTestBadExe_REGEX "BAD_COMMAND")
-  # cygwin can not be made to produce a BAD_COMMAND error
+  # some cygwin can not be made to produce a BAD_COMMAND error
   # the best we can get from it is a failed test
   IF(CYGWIN)
-    SET(CTestTestBadExe_REGEX "\\*\\*\\*Failed")
+    SET(CTestTestBadExe_REGEX "(\\*\\*\\*Failed)|BAD_COMMAND")
   ENDIF()
   SET_TESTS_PROPERTIES(CTestTestBadExe PROPERTIES
     PASS_REGULAR_EXPRESSION "${CTestTestBadExe_REGEX}")
@@ -1284,7 +1284,16 @@ ${CMake_BINARY_DIR}/bin/cmake -DVERSION=master -P ${CMake_SOURCE_DIR}/Utilities/
     -S "${CMake_BINARY_DIR}/Tests/CTestTestParallel/test.cmake" -V
     --output-log "${CMake_BINARY_DIR}/Tests/CTestTestParallel/testOutput.log"
     )
-  
+
+  CONFIGURE_FILE(
+    "${CMake_SOURCE_DIR}/Tests/CTestTestResourceLock/test.cmake.in"
+    "${CMake_BINARY_DIR}/Tests/CTestTestResourceLock/test.cmake"
+    @ONLY ESCAPE_QUOTES)
+  ADD_TEST(CTestTestResourceLock ${CMAKE_CTEST_COMMAND}
+    -S "${CMake_BINARY_DIR}/Tests/CTestTestResourceLock/test.cmake" -V
+    --output-log "${CMake_BINARY_DIR}/Tests/CTestTestResourceLock/output.log"
+    )
+
   CONFIGURE_FILE(
     "${CMake_SOURCE_DIR}/Tests/CTestTestScheduler/test.cmake.in"
     "${CMake_BINARY_DIR}/Tests/CTestTestScheduler/test.cmake"
@@ -1295,7 +1304,22 @@ ${CMake_BINARY_DIR}/bin/cmake -DVERSION=master -P ${CMake_SOURCE_DIR}/Utilities/
     )
   SET_TESTS_PROPERTIES(CTestTestScheduler PROPERTIES
     PASS_REGULAR_EXPRESSION "Start 1.*Start 2.*Start 3.*Start 4.*Start 5.*Start 5.*Start 4.*Start 3.*Start 2.*Start 1")
-  
+
+  CONFIGURE_FILE(
+    "${CMake_SOURCE_DIR}/Tests/CTestTestStopTime/test.cmake.in"
+    "${CMake_BINARY_DIR}/Tests/CTestTestStopTime/test.cmake"
+    @ONLY ESCAPE_QUOTES)
+  CONFIGURE_FILE(
+    "${CMake_SOURCE_DIR}/Tests/CTestTestStopTime/GetDate.cmake"
+    "${CMake_BINARY_DIR}/Tests/CTestTestStopTime/GetDate.cmake"
+    COPYONLY)
+  ADD_TEST(CTestTestStopTime ${CMAKE_CTEST_COMMAND}
+    -S "${CMake_BINARY_DIR}/Tests/CTestTestStopTime/test.cmake" -V
+    --output-log "${CMake_BINARY_DIR}/Tests/CTestTestStopTime/testOutput.log"
+    )
+  SET_TESTS_PROPERTIES(CTestTestStopTime PROPERTIES
+    PASS_REGULAR_EXPRESSION "The stop time has been passed")
+
   CONFIGURE_FILE(
     "${CMake_SOURCE_DIR}/Tests/CTestTestSubdir/test.cmake.in"
     "${CMake_BINARY_DIR}/Tests/CTestTestSubdir/test.cmake"
@@ -1384,26 +1408,45 @@ ${CMake_BINARY_DIR}/bin/cmake -DVERSION=master -P ${CMake_SOURCE_DIR}/Utilities/
   endforeach()
 
 
-  IF (CTEST_TEST_CTEST AND CMAKE_RUN_LONG_TESTS)
+  IF (CMAKE_TESTS_CDASH_SERVER)
+    SET(regex "^([^:]+)://([^/]+)(/.*)$")
+
+    IF ("${CMAKE_TESTS_CDASH_SERVER}" MATCHES "${regex}")
+      SET(protocol "${CMAKE_MATCH_1}")
+      SET(server "${CMAKE_MATCH_2}")
+      SET(path "${CMAKE_MATCH_3}")
+    ELSE ("${CMAKE_TESTS_CDASH_SERVER}" MATCHES "${regex}")
+      SET(protocol "http")
+      SET(server "www.cdash.org")
+      SET(path "/CDash")
+      MESSAGE("warning: CMAKE_TESTS_CDASH_SERVER does not match expected regex...")
+      MESSAGE("         ...using default url='${protocol}://${server}${path}' for CTestTest[23]")
+    ENDIF ("${CMAKE_TESTS_CDASH_SERVER}" MATCHES "${regex}")
+  ENDIF (CMAKE_TESTS_CDASH_SERVER)
+
+
+  IF (CTEST_TEST_CTEST AND CMAKE_RUN_LONG_TESTS AND CMAKE_TESTS_CDASH_SERVER)
     CONFIGURE_FILE("${CMake_SOURCE_DIR}/Tests/CTestTest/test.cmake.in"
       "${CMake_BINARY_DIR}/Tests/CTestTest/test.cmake" @ONLY ESCAPE_QUOTES)
     ADD_TEST(CTestTest ${CMAKE_CTEST_COMMAND}
       -S "${CMake_BINARY_DIR}/Tests/CTestTest/test.cmake" -V
       --output-log "${CMake_BINARY_DIR}/Tests/CTestTest/testOutput.log"
       )
+
     CONFIGURE_FILE("${CMake_SOURCE_DIR}/Tests/CTestTest2/test.cmake.in"
       "${CMake_BINARY_DIR}/Tests/CTestTest2/test.cmake" @ONLY ESCAPE_QUOTES)
     ADD_TEST(CTestTest2 ${CMAKE_CTEST_COMMAND}
       -S "${CMake_BINARY_DIR}/Tests/CTestTest2/test.cmake" -V
       --output-log "${CMake_BINARY_DIR}/Tests/CTestTest2/testOutput.log"
       )
+
     CONFIGURE_FILE("${CMake_SOURCE_DIR}/Tests/CTestTest3/test.cmake.in"
       "${CMake_BINARY_DIR}/Tests/CTestTest3/test.cmake" @ONLY ESCAPE_QUOTES)
     ADD_TEST(CTestTest3 ${CMAKE_CTEST_COMMAND}
       -S "${CMake_BINARY_DIR}/Tests/CTestTest3/test.cmake" -V
       --output-log "${CMake_BINARY_DIR}/Tests/CTestTest3/testOutput.log"
       )
-    
+
     # these tests take a long time, make sure they have it
     # if timeouts have not already been set
     GET_TEST_PROPERTY(CTestTest TIMEOUT PREVIOUS_TIMEOUT)
@@ -1423,7 +1466,32 @@ ${CMake_BINARY_DIR}/bin/cmake -DVERSION=master -P ${CMake_SOURCE_DIR}/Utilities/
       SET_TESTS_PROPERTIES ( CTestTest3
         PROPERTIES TIMEOUT ${CMAKE_LONG_TEST_TIMEOUT})
     ENDIF ("${PREVIOUS_TIMEOUT}" MATCHES NOTFOUND)
-  ENDIF (CTEST_TEST_CTEST AND CMAKE_RUN_LONG_TESTS)
+  ENDIF (CTEST_TEST_CTEST AND CMAKE_RUN_LONG_TESTS AND CMAKE_TESTS_CDASH_SERVER)
+
+  IF(NOT DEFINED CTEST_RUN_CTestSubmitLargeOutput)
+    SET(CTEST_RUN_CTestSubmitLargeOutput OFF)
+
+    IF (CMAKE_TESTS_CDASH_SERVER AND "${server}" STREQUAL "localhost")
+      SET(CTEST_RUN_CTestSubmitLargeOutput ON)
+    ENDIF (CMAKE_TESTS_CDASH_SERVER AND "${server}" STREQUAL "localhost")
+  ENDIF(NOT DEFINED CTEST_RUN_CTestSubmitLargeOutput)
+
+  IF(CTEST_RUN_CTestSubmitLargeOutput)
+    CONFIGURE_FILE(
+      "${CMake_SOURCE_DIR}/Tests/CTestSubmitLargeOutput/test.cmake.in"
+      "${CMake_BINARY_DIR}/Tests/CTestSubmitLargeOutput/test.cmake"
+      @ONLY ESCAPE_QUOTES
+      )
+    ADD_TEST(CTestSubmitLargeOutput ${CMAKE_CTEST_COMMAND}
+      -S "${CMake_BINARY_DIR}/Tests/CTestSubmitLargeOutput/test.cmake" -V
+      --output-log "${CMake_BINARY_DIR}/Tests/CTestSubmitLargeOutput/testOutput.log"
+      )
+
+    # This test only passes if it fails to submit properly...
+    #
+    SET_TESTS_PROPERTIES(CTestSubmitLargeOutput PROPERTIES
+      PASS_REGULAR_EXPRESSION "Errors occurred during submission")
+  ENDIF(CTEST_RUN_CTestSubmitLargeOutput)
 
   IF (CMAKE_RUN_LONG_TESTS AND TEST_KDE4_STABLE_BRANCH)
     IF(UNIX)

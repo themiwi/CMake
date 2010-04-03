@@ -154,6 +154,17 @@ std::string cmCTest::CurrentTime()
   return cmXMLSafe(cmCTest::CleanString(current_time)).str();
 }
 
+//----------------------------------------------------------------------
+std::string cmCTest::GetCostDataFile()
+{
+  std::string fname = this->GetCTestConfiguration("CostDataFile");
+  if(fname == "")
+    {
+    fname= this->GetBinaryDir() + "/Testing/Temporary/CTestCostData.txt";
+    }
+  return fname;
+}
+
 #ifdef CMAKE_BUILD_WITH_CMAKE
 //----------------------------------------------------------------------------
 static size_t
@@ -300,9 +311,12 @@ cmCTest::cmCTest()
   this->InteractiveDebugMode   = true;
   this->TimeOut                = 0;
   this->GlobalTimeout          = 0;
+  this->LastStopTimeout        = 24 * 60 * 60;
   this->CompressXMLFiles       = false;
   this->CTestConfigFile        = "";
   this->ScheduleType           = "";
+  this->StopTime               = "";
+  this->NextDayStopTime        = false;
   this->OutputLogFile          = 0;
   this->OutputLogFileLastTag   = -1;
   this->SuppressUpdatingCTestConfiguration = false;
@@ -1870,6 +1884,12 @@ void cmCTest::HandleCommandLineArguments(size_t &i,
     double timeout = (double)atof(args[i].c_str());
     this->GlobalTimeout = timeout;
     }
+
+  if(this->CheckArgument(arg, "--stop-time") && i < args.size() - 1)
+    {
+    i++;
+    this->SetStopTime(args[i]);
+    }
   
   if(this->CheckArgument(arg, "-C", "--build-config") &&
      i < args.size() - 1)
@@ -2324,6 +2344,13 @@ void cmCTest::SetNotesFiles(const char* notes)
 }
 
 //----------------------------------------------------------------------
+void cmCTest::SetStopTime(std::string time)
+{
+  this->StopTime = time;
+  this->DetermineNextDayStop();
+}
+
+//----------------------------------------------------------------------
 int cmCTest::ReadCustomConfigurationFileTree(const char* dir, cmMakefile* mf)
 {
   bool found = false;
@@ -2522,6 +2549,46 @@ std::string cmCTest::GetCTestConfiguration(const char *name)
 void cmCTest::EmptyCTestConfiguration()
 {
   this->CTestConfiguration.clear();
+}
+
+//----------------------------------------------------------------------
+void cmCTest::DetermineNextDayStop()
+{
+  struct tm* lctime;
+  time_t current_time = time(0);
+  lctime = gmtime(&current_time);
+  int gm_hour = lctime->tm_hour;
+  time_t gm_time = mktime(lctime);
+  lctime = localtime(&current_time);
+  int local_hour = lctime->tm_hour;
+
+  int tzone_offset = local_hour - gm_hour;
+  if(gm_time > current_time && gm_hour < local_hour)
+    {
+    // this means gm_time is on the next day
+    tzone_offset -= 24;
+    }
+  else if(gm_time < current_time && gm_hour > local_hour)
+    {
+    // this means gm_time is on the previous day
+    tzone_offset += 24;
+    }
+
+  tzone_offset *= 100;
+  char buf[1024];
+  sprintf(buf, "%d%02d%02d %s %+05i",
+          lctime->tm_year + 1900,
+          lctime->tm_mon + 1,
+          lctime->tm_mday,
+          this->StopTime.c_str(),
+          tzone_offset);
+
+  time_t stop_time = curl_getdate(buf, &current_time);
+
+  if(stop_time < current_time)
+    {
+    this->NextDayStopTime = true;
+    }
 }
 
 //----------------------------------------------------------------------

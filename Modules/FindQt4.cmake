@@ -397,6 +397,7 @@ FIND_PROGRAM(QT_QMAKE_EXECUTABLE NAMES qmake qmake4 qmake-qt4 qmake-mac PATHS
   "[HKEY_CURRENT_USER\\Software\\Trolltech\\Versions\\4.0.0;InstallDir]/bin"
   "[HKEY_CURRENT_USER\\Software\\Trolltech\\Versions\\${qt_install_version};InstallDir]/bin"
   $ENV{QTDIR}/bin
+  DOC "The qmake executable for the Qt installation to use"
 )
 
 IF (QT_QMAKE_EXECUTABLE)
@@ -418,6 +419,7 @@ IF (QT_QMAKE_EXECUTABLE)
       "[HKEY_CURRENT_USER\\Software\\Trolltech\\Qt3Versions\\4.0.0;InstallDir]/bin"
       "[HKEY_CURRENT_USER\\Software\\Trolltech\\Versions\\4.0.0;InstallDir]/bin"
       $ENV{QTDIR}/bin
+      DOC "The qmake executable for the Qt installation to use"
       )
     IF(QT_QMAKE_EXECUTABLE)
       EXEC_PROGRAM(${QT_QMAKE_EXECUTABLE} 
