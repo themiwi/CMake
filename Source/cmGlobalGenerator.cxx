@@ -1732,9 +1732,13 @@ void cmGlobalGenerator::CreateDefaultGlobalTargets(cmTargets* targets)
   //Install
   if(this->InstallTargetEnabled)
     {
+    std::vector<cmStdString> components;
+    components.push_back(""); // all targets
     if(!cmakeCfgIntDir || !*cmakeCfgIntDir || cmakeCfgIntDir[0] == '.')
       {
       std::set<cmStdString>* componentsSet = &this->InstallComponents;
+      components.insert(components.end(),
+          componentsSet->begin(), componentsSet->end());
       cpackCommandLines.erase(cpackCommandLines.begin(),
         cpackCommandLines.end());
       depends.erase(depends.begin(), depends.end());
@@ -1762,9 +1766,6 @@ void cmGlobalGenerator::CreateDefaultGlobalTargets(cmTargets* targets)
           &cpackCommandLines, depends, 0);
       }
     std::string cmd = cmakeCommand;
-    cpackCommandLines.erase(cpackCommandLines.begin(),
-      cpackCommandLines.end());
-    singleLine.erase(singleLine.begin(), singleLine.end());
     depends.erase(depends.begin(), depends.end());
     if ( this->GetPreinstallTargetName() )
       {
@@ -1786,53 +1787,83 @@ void cmGlobalGenerator::CreateDefaultGlobalTargets(cmTargets* targets)
       // automatically convert this name to the build-time location.
       cmd = "cmake";
       }
-    singleLine.push_back(cmd.c_str());
+    std::string cfgArg;
     if ( cmakeCfgIntDir && *cmakeCfgIntDir && cmakeCfgIntDir[0] != '.' )
       {
-      std::string cfgArg = "-DBUILD_TYPE=";
+      cfgArg = "-DBUILD_TYPE=";
       cfgArg += mf->GetDefinition("CMAKE_CFG_INTDIR");
-      singleLine.push_back(cfgArg);
-      }
-    singleLine.push_back("-P");
-    singleLine.push_back("cmake_install.cmake");
-    cpackCommandLines.push_back(singleLine);
-    (*targets)[this->GetInstallTargetName()] =
-      this->CreateGlobalTarget(
-        this->GetInstallTargetName(), "Install the project...",
-        &cpackCommandLines, depends, 0);
-
-    // install_local
-    if(const char* install_local = this->GetInstallLocalTargetName())
-      {
-      cmCustomCommandLine localCmdLine = singleLine;
-
-      localCmdLine.insert(localCmdLine.begin()+1,
-                                               "-DCMAKE_INSTALL_LOCAL_ONLY=1");
-      cpackCommandLines.erase(cpackCommandLines.begin(),
-                                                      cpackCommandLines.end());
-      cpackCommandLines.push_back(localCmdLine);
-
-      (*targets)[install_local] =
-        this->CreateGlobalTarget(
-          install_local, "Installing only the local directory...",
-          &cpackCommandLines, depends, 0);
       }
 
-    // install_strip
-    const char* install_strip = this->GetInstallStripTargetName();
-    if((install_strip !=0) && (mf->IsSet("CMAKE_STRIP")))
+    std::vector<cmStdString>::const_iterator ci = components.begin(),
+                                             ce = components.end();
+    for (; ci != ce; ++ci)
       {
-      cmCustomCommandLine stripCmdLine = singleLine;
-
-      stripCmdLine.insert(stripCmdLine.begin()+1,"-DCMAKE_INSTALL_DO_STRIP=1");
       cpackCommandLines.erase(cpackCommandLines.begin(),
         cpackCommandLines.end());
-      cpackCommandLines.push_back(stripCmdLine);
+      singleLine.erase(singleLine.begin(), singleLine.end());
 
-      (*targets)[install_strip] =
+      std::string install = this->GetInstallTargetName(*ci);
+      std::string install_local = this->GetInstallLocalTargetName(*ci);
+      std::string install_strip = this->GetInstallStripTargetName(*ci);
+      std::string what;
+      if (ci->empty())
+        {
+        what = "project";
+        }
+      else
+        {
+        what = "component " + *ci;
+        }
+
+      singleLine.push_back(cmd.c_str());
+      singleLine.push_back(cfgArg);
+      if(ci->size())
+        {
+        singleLine.push_back("-DCOMPONENT="+*ci);
+        }
+      singleLine.push_back("-P");
+      singleLine.push_back("cmake_install.cmake");
+      cpackCommandLines.push_back(singleLine);
+      (*targets)[install.c_str()] =
         this->CreateGlobalTarget(
-          install_strip, "Installing the project stripped...",
+          install.c_str(), ("Install the "+what+"...").c_str(),
           &cpackCommandLines, depends, 0);
+
+      // install_local
+      if(install_local.size())
+        {
+        cmCustomCommandLine localCmdLine = singleLine;
+
+        localCmdLine.insert(localCmdLine.begin()+1,
+                                               "-DCMAKE_INSTALL_LOCAL_ONLY=1");
+        cpackCommandLines.erase(cpackCommandLines.begin(),
+                                                      cpackCommandLines.end());
+        cpackCommandLines.push_back(localCmdLine);
+
+        (*targets)[install_local.c_str()] =
+          this->CreateGlobalTarget(
+            install_local.c_str(),
+            ("Installing only the local directory of "+what+"...").c_str(),
+            &cpackCommandLines, depends, 0);
+        }
+
+      // install_strip
+      if(install_strip.size() && (mf->IsSet("CMAKE_STRIP")))
+        {
+        cmCustomCommandLine stripCmdLine = singleLine;
+
+        stripCmdLine.insert(stripCmdLine.begin()+1,
+                                                 "-DCMAKE_INSTALL_DO_STRIP=1");
+        cpackCommandLines.erase(cpackCommandLines.begin(),
+          cpackCommandLines.end());
+        cpackCommandLines.push_back(stripCmdLine);
+
+        (*targets)[install_strip.c_str()] =
+          this->CreateGlobalTarget(
+            install_strip.c_str(),
+            ("Installing the "+what+" stripped...").c_str(),
+            &cpackCommandLines, depends, 0);
+        }
       }
     }
 }
@@ -1889,6 +1920,16 @@ void cmGlobalGenerator::AddTarget(cmTargets::value_type &v)
 {
   assert(!v.second.IsImported());
   this->TotalTargets[v.first] = &v.second;
+}
+
+std::string cmGlobalGenerator::GetInstallTargetName(const std::string& comp)
+{
+  std::string res("INSTALL");
+  if(comp.size())
+    {
+    res += "-" + comp;
+    }
+  return res;
 }
 
 void cmGlobalGenerator::SetExternalMakefileProjectGenerator(

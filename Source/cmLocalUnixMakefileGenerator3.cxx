@@ -1676,6 +1676,7 @@ void cmLocalUnixMakefileGenerator3
       // Provide a "/fast" version of the target.
       depends.clear();
       if((targetName == "install") 
+          || (targetName.compare(0, 8, "install-")==0)
           || (targetName == "install_local")
           || (targetName == "install_strip"))
         {

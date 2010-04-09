@@ -3309,6 +3309,18 @@ void cmGlobalXCodeGenerator::AppendFlag(std::string& flags,
 
 //----------------------------------------------------------------------------
 std::string
+cmGlobalXCodeGenerator::GetInstallTargetName(const std::string& comp)
+{
+  std::string res("install");
+  if(comp.size())
+    {
+    res += "-"+comp;
+    }
+  return res;
+}
+
+//----------------------------------------------------------------------------
+std::string
 cmGlobalXCodeGenerator::ComputeInfoPListLocation(cmTarget& target)
 {
   std::string plist = target.GetMakefile()->GetCurrentOutputDirectory();

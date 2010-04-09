@@ -144,9 +144,9 @@ protected:
 
   // Setup target names
   virtual const char* GetAllTargetName()          { return "all"; }
-  virtual const char* GetInstallTargetName()      { return "install"; }
-  virtual const char* GetInstallLocalTargetName() { return "install/local"; }
-  virtual const char* GetInstallStripTargetName() { return "install/strip"; }
+  virtual std::string GetInstallTargetName(const std::string& comp);
+  virtual std::string GetInstallLocalTargetName(const std::string& comp);
+  virtual std::string GetInstallStripTargetName(const std::string& comp);
   virtual const char* GetPreinstallTargetName()   { return "preinstall"; }
   virtual const char* GetTestTargetName()         { return "test"; }
   virtual const char* GetPackageTargetName()      { return "package"; }

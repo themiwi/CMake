@@ -1055,3 +1055,26 @@ bool cmGlobalUnixMakefileGenerator3
     }
   return false;
 }
+
+std::string cmGlobalUnixMakefileGenerator3
+::GetInstallTargetName(const std::string& comp)
+{
+  std::string res("install");
+  if(comp.size())
+    {
+    res += "-" + comp;
+    }
+  return res;
+}
+
+std::string cmGlobalUnixMakefileGenerator3
+::GetInstallLocalTargetName(const std::string& comp)
+{
+  return GetInstallTargetName(comp)+"/local";
+}
+
+std::string cmGlobalUnixMakefileGenerator3
+::GetInstallStripTargetName(const std::string& comp)
+{
+  return GetInstallTargetName(comp)+"/strip";
+}
